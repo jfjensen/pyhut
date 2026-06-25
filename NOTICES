@@ -1,0 +1,57 @@
+THIRD-PARTY NOTICES
+===================
+
+This project bundles, in part, third-party code. The notices below are
+reproduced as required by the applicable licenses. The project's own code is
+licensed separately; see the LICENSE file.
+
+
+-------------------------------------------------------------------------------
+1. VL53L0X time-of-flight driver (hut/duckiebot.py, the VL53L0X class and its
+   module-level helpers)
+-------------------------------------------------------------------------------
+
+The VL53L0X driver in this project is a port of Adafruit's CircuitPython
+VL53L0X driver to a raw-I2C implementation. It is used and distributed under
+the MIT License reproduced below.
+
+    SPDX-FileCopyrightText: 2017 Tony DiCola for Adafruit Industries
+    SPDX-License-Identifier: MIT
+
+    Source: https://github.com/adafruit/Adafruit_CircuitPython_VL53L0X
+
+    MIT License
+
+    Copyright (c) 2017 Tony DiCola for Adafruit Industries
+
+    Permission is hereby granted, free of charge, to any person obtaining a
+    copy of this software and associated documentation files (the "Software"),
+    to deal in the Software without restriction, including without limitation
+    the rights to use, copy, modify, merge, publish, distribute, sublicense,
+    and/or sell copies of the Software, and to permit persons to whom the
+    Software is furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in
+    all copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+    FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+    DEALINGS IN THE SOFTWARE.
+
+
+Upstream credit chain (informational)
+-------------------------------------
+
+Adafruit's driver is itself adapted from Pololu's Arduino VL53L0X library:
+
+    https://github.com/pololu/vl53l0x-arduino
+
+The sensor initialization and tuning register sequence ultimately derives from
+ST Microelectronics' VL53L0X API (STSW-IMG005); some register names and
+explanatory comments originate in ST's API source, API user manual (UM2039),
+and the VL53L0X datasheet. These attributions are carried forward here in
+keeping with the upstream projects.
