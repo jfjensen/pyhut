@@ -1,32 +1,6 @@
+# Build configuration. Metadata lives in setup.cfg so that the package also
+# installs on the older pip/setuptools shipped with JetPack 4.x (Python 3.6).
+# The build-system pin below is deliberately conservative for that reason.
 [build-system]
-requires = ["setuptools>=61"]
+requires = ["setuptools>=40.8.0", "wheel"]
 build-backend = "setuptools.build_meta"
-
-[project]
-name = "pyhut"
-version = "0.1.0"
-description = "Bare-metal, hardware-agnostic control library for a differential-drive robot (Duckiebot HUT v3.1 on a Jetson Nano)."
-readme = "README.md"
-requires-python = ">=3.6"
-license = { file = "LICENSE" }
-authors = [{ name = "Jes Fink-Jensen" }]
-keywords = ["duckiebot", "duckietown", "jetson-nano", "robot", "i2c", "gpio", "differential-drive"]
-classifiers = [
-    "Programming Language :: Python :: 3",
-    "Operating System :: POSIX :: Linux",
-    "License :: OSI Approved :: MIT License",
-    "Topic :: System :: Hardware :: Hardware Drivers",
-    "Intended Audience :: Developers",
-]
-dependencies = []  # standard library only
-
-[project.scripts]
-pyhut-demo = "pyhut.demo:main"
-
-[tool.setuptools]
-# Flat layout: the modules in this folder ARE the `pyhut` package.
-package-dir = { "pyhut" = "." }
-packages = ["pyhut"]
-
-[tool.setuptools.package-data]
-pyhut = ["LICENSE", "NOTICES", "README.md"]

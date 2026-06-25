@@ -40,8 +40,8 @@ folder onto the Jetson next to your own code, then import it. No `pip`, no root
 needed to install:
 
 ```bash
-scp -r pyhut <username>@<robot>:~/Python/        # or git clone, or a USB copy
-ssh <username>@<robot>
+scp -r pyhut jfj@<robot>:~/Python/        # or git clone, or a USB copy
+ssh jfj@<robot>
 cd ~/Python                               # the folder that CONTAINS pyhut/
 python3 -c "import pyhut; print('ok')"    # verify it's importable
 ```
@@ -50,15 +50,18 @@ Keep the whole folder together — the bundled `LICENSE` and `NOTICES` need to
 travel with the code.
 
 **Option B — pip (for development or publishing).** From inside the `pyhut`
-folder (the one with `pyproject.toml`):
+folder (the one with `setup.py`):
 
 ```bash
 pip3 install .            # or:  pip3 install -e .   for an editable install
 ```
 
-This also installs a `pyhut-demo` command. Option B needs a reasonably recent
-`pip`/`setuptools`; the stock pip on JetPack 4.x is old, so you may need
-`pip3 install --upgrade pip setuptools` first, or just use Option A.
+This also installs a `pyhut-demo` command. The package ships both classic
+(`setup.py` / `setup.cfg`) and modern (`pyproject.toml`) packaging, so it
+installs on the older pip bundled with JetPack 4.x as well as on current
+tooling. If pip still complains, upgrade it first with
+`pip3 install --upgrade "pip<22" setuptools` (the last versions that support
+Python 3.6), or just use Option A.
 
 ## Run the demo
 
@@ -86,7 +89,7 @@ wheels stop if you kill the script mid-run.
 | `duckiebot.py` | Concrete drivers + the `DuckiebotHUT` facade. |
 | `font.py` | Embedded 5x7 font for the OLED. |
 | `demo.py` | Runnable demo (`sudo python3 -m pyhut.demo`). |
-| `pyproject.toml` | Packaging metadata for `pip install`. |
+| `pyproject.toml`, `setup.py`, `setup.cfg` | Packaging metadata for `pip install` (classic + modern, py3.6-compatible). |
 
 ## Use
 
