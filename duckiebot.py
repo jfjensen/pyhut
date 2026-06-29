@@ -35,9 +35,11 @@ from .interfaces import (
     MagReading,
     RangeSensor,
     Robot,
+    Sampler,
     WheelEncoder,
 )
 from .lowlevel import EdgeCounter, Gpio, I2CDevice
+from .sampler import ThreadedSampler
 
 # Default board addresses / bus -------------------------------------------------
 I2C_BUS = "/dev/i2c-1"
@@ -720,6 +722,22 @@ class DuckiebotHUT(Robot):
         self._display = self._try(lambda: SSD1306(bus, ADDR_OLED)) \
             if (all_ or "display" in want) else None
 
+        # One sampler owns the read side of every sensor that came up. It is left
+        # STOPPED: bringing the robot up, calibrating, or driving shouldn't pay
+        # for sampling until a consumer calls bot.sampler.start(). None if there's
+        # nothing to sample.
+        sensors = (self._imu, self._mag, self._left_enc, self._right_enc, self._tof)
+        if any(s is not None for s in sensors):
+            self._sampler = ThreadedSampler(
+                imu=self._imu,
+                magnetometer=self._mag,
+                left_encoder=self._left_enc,
+                right_encoder=self._right_enc,
+                range_sensor=self._tof,
+            )  # type: Optional[Sampler]
+        else:
+            self._sampler = None
+
     @staticmethod
     def _try(factory):
         try:
@@ -752,12 +770,19 @@ class DuckiebotHUT(Robot):
         return self._tof
 
     @property
+    def sampler(self) -> Optional[Sampler]:
+        return self._sampler
+
+    @property
     def display(self) -> Optional[Display]:
         return self._display
 
     def close(self) -> None:
-        # Drivetrain first (it stops the wheels), then everything else.
+        # Drivetrain first (it stops the wheels), then the sampler (so it isn't
+        # mid-read when we close the device fds it reads), then the devices.
         self._drivetrain.close()
+        if self._sampler is not None:
+            self._sampler.stop()
         for dev in (self._imu, self._left_enc, self._right_enc, self._tof, self._display):
             if dev is not None:
                 try:

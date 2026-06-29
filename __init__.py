@@ -27,6 +27,8 @@ from .interfaces import (
     MagReading,
     RangeSensor,
     Robot,
+    Sample,
+    Sampler,
     WheelEncoder,
 )
 from .duckiebot import (
@@ -38,12 +40,13 @@ from .duckiebot import (
     SSD1306,
     VL53L0X,
 )
+from .sampler import ThreadedSampler
 
 __all__ = [
     # interfaces
     "Robot", "Drivetrain", "IMU", "IMUReading", "Magnetometer", "MagReading",
-    "WheelEncoder", "RangeSensor", "Display",
+    "WheelEncoder", "RangeSensor", "Display", "Sample", "Sampler",
     # duckiebot backend
     "DuckiebotHUT", "DuckiebotDrivetrain", "PCA9685", "MPU9250",
-    "HallWheelEncoder", "VL53L0X", "SSD1306",
+    "HallWheelEncoder", "VL53L0X", "SSD1306", "ThreadedSampler",
 ]
