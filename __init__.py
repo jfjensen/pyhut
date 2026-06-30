@@ -41,6 +41,11 @@ from .duckiebot import (
     VL53L0X,
 )
 from .sampler import ThreadedSampler
+from .battery import (
+    BatteryReading,
+    Duckiebattery,
+    find_battery_ports,
+)
 from .calibration import (
     Calibration,
     CalibratedIMU,
@@ -61,6 +66,8 @@ __all__ = [
     # duckiebot backend
     "DuckiebotHUT", "DuckiebotDrivetrain", "PCA9685", "MPU9250",
     "HallWheelEncoder", "VL53L0X", "SSD1306", "ThreadedSampler",
+    # battery
+    "Duckiebattery", "BatteryReading", "find_battery_ports",
     # calibration
     "Calibration", "CalibratedIMU", "CalibratedMagnetometer",
     "GyroFit", "MagFit", "fit_gyro_bias", "fit_mag_iron",

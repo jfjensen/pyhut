@@ -1,0 +1,187 @@
+#!/usr/bin/env python3
+"""
+duckiebattery-poweroff -- cut the Duckiebattery's output at the very end of a
+shutdown, so the pack returns to OFF and the side button powers it on next time.
+
+WHY THIS EXISTS, AND WHY IT IS NOT just turn_off() + poweroff:
+
+On Duckiebattery firmware 2.0.1 and newer the shutdown command is a bare "QQ"
+with no duration. The pack then cuts its output after a short, fixed, built-in
+delay (about 2-3 seconds on firmware 2.0.2). That delay is meant to be the last
+breath of a shutdown, not a window you halt inside. If you send it before the OS
+is down, the rail dies mid-halt. So the command has to be sent at the very end of
+the shutdown, after services are stopped and the root filesystem is read-only.
+
+systemd runs every executable in its system-shutdown directory at exactly that
+moment, in the systemd-shutdown phase, and passes the action ("poweroff",
+"reboot", "halt", "kexec") as the first argument. This script cuts the battery
+only on "poweroff"/"halt", so a reboot is left alone (cutting power on a reboot
+would stop the reboot).
+
+The directory is /lib/systemd/system-shutdown/ on Debian, Ubuntu and JetPack
+(Ubuntu 18.04 on the Jetson Nano), and /usr/lib/systemd/system-shutdown/ on
+distributions that keep systemd under /usr. On a merged-/usr system the two paths
+are the same. If unsure which prefix is live on your box, check where the
+matching system-sleep directory lives:
+
+    ls -ld /lib/systemd/system-sleep /usr/lib/systemd/system-sleep 2>/dev/null
+
+Because it runs after /home and other filesystems may already be unmounted, this
+script imports nothing from pyhut. It is pure standard library and lives on the
+root filesystem. It re-implements the small bit it needs: find the pack by USB
+VID:PID, open the tty raw at 9600 baud, and write "QQ".
+
+INSTALL (run as root on the robot; the directory may not exist yet, hence the
+mkdir):
+
+    sudo mkdir -p /lib/systemd/system-shutdown
+    sudo cp duckiebattery-poweroff /lib/systemd/system-shutdown/
+    sudo chmod +x /lib/systemd/system-shutdown/duckiebattery-poweroff
+
+There is nothing to enable. systemd runs everything in that directory on every
+shutdown automatically. To test it without rebooting, you can run it by hand and
+watch the pack drop a couple of seconds later (this WILL cut power, so save your
+work first):
+
+    sudo /lib/systemd/system-shutdown/duckiebattery-poweroff poweroff
+
+To confirm afterwards that the shutdown was clean, boot back up and check that the
+filesystem journal did not have to be replayed (no output is the good case):
+
+    sudo dmesg | grep -iE 'EXT4-fs.*(recovery|orphan)'
+"""
+
+import glob
+import os
+import sys
+import time
+
+try:
+    import termios
+except ImportError:
+    termios = None
+
+
+BATTERY_VID = "04d8"
+BATTERY_PID = "ecb7"
+BAUD = 9600
+
+
+def log(msg):
+    # systemd captures stdout from system-shutdown scripts to the console/journal.
+    sys.stdout.write("duckiebattery-poweroff: %s\n" % msg)
+    sys.stdout.flush()
+
+
+def find_port(vid=BATTERY_VID, pid=BATTERY_PID):
+    vid, pid = vid.lower(), pid.lower()
+    for dev in sorted(glob.glob("/dev/ttyACM*")):
+        try:
+            node = os.path.realpath("/sys/class/tty/%s/device" % os.path.basename(dev))
+        except OSError:
+            continue
+        for _ in range(6):
+            v = os.path.join(node, "idVendor")
+            p = os.path.join(node, "idProduct")
+            if os.path.isfile(v) and os.path.isfile(p):
+                try:
+                    with open(v) as fv, open(p) as fp:
+                        if fv.read().strip().lower() == vid and fp.read().strip().lower() == pid:
+                            return dev
+                except OSError:
+                    pass
+                break
+            parent = os.path.dirname(node)
+            if parent == node:
+                break
+            node = parent
+    return None
+
+
+def open_raw(path, baud=BAUD):
+    fd = os.open(path, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
+    iflag, oflag, cflag, lflag, ispeed, ospeed, cc = termios.tcgetattr(fd)
+    speed = getattr(termios, "B%d" % baud)
+    iflag &= ~(termios.IGNBRK | termios.BRKINT | termios.PARMRK | termios.ISTRIP
+               | termios.INLCR | termios.IGNCR | termios.ICRNL | termios.IXON)
+    iflag |= termios.IGNPAR
+    oflag &= ~termios.OPOST
+    lflag &= ~(termios.ECHO | termios.ECHONL | termios.ICANON
+               | termios.ISIG | termios.IEXTEN)
+    cflag &= ~(termios.PARENB | termios.CSTOPB | termios.CSIZE
+               | getattr(termios, "CRTSCTS", 0))
+    cflag |= termios.CS8 | termios.CLOCAL | termios.CREAD
+    cc = list(cc)
+    cc[termios.VMIN] = 0
+    cc[termios.VTIME] = 0
+    termios.tcsetattr(fd, termios.TCSANOW, [iflag, oflag, cflag, lflag, speed, speed, cc])
+    termios.tcflush(fd, termios.TCIOFLUSH)
+    return fd
+
+
+def wait_for_stream(fd, seconds=2.0):
+    """Read until we see a frame (a line with a brace), so we know the pack is
+    alive and streaming before we send the command. Best-effort; returns True if
+    any data was seen."""
+    import select
+    deadline = time.monotonic() + seconds
+    buf = b""
+    while time.monotonic() < deadline:
+        r, _, _ = select.select([fd], [], [], deadline - time.monotonic())
+        if not r:
+            continue
+        try:
+            chunk = os.read(fd, 256)
+        except OSError:
+            continue
+        if chunk:
+            buf += chunk
+            if b"{" in buf:
+                return True
+    return False
+
+
+def main():
+    action = sys.argv[1] if len(sys.argv) > 1 else ""
+    # Only cut power when the machine is actually going off. Leave reboot/kexec.
+    if action not in ("poweroff", "halt"):
+        return 0
+    if termios is None:
+        return 0
+
+    port = find_port()
+    if not port:
+        log("no battery found on USB; nothing to do")
+        return 0
+
+    try:
+        fd = open_raw(port)
+    except OSError as e:
+        log("could not open %s: %s" % (port, e))
+        return 0
+
+    try:
+        # Make sure it is streaming, then send the cut command. Send it twice
+        # with a short gap, since this is our one and only shot.
+        wait_for_stream(fd, seconds=2.0)
+        for _ in range(2):
+            try:
+                os.write(fd, b"QQ")
+                termios.tcdrain(fd)
+            except OSError:
+                pass
+            time.sleep(0.2)
+        log("sent power-off (QQ) to %s" % port)
+        # Give the pack a moment to register before systemd issues the final
+        # poweroff syscall. The rail drops on the pack's own ~2-3s timer.
+        time.sleep(0.5)
+    finally:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
