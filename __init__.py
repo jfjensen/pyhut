@@ -41,6 +41,18 @@ from .duckiebot import (
     VL53L0X,
 )
 from .sampler import ThreadedSampler
+from .calibration import (
+    Calibration,
+    CalibratedIMU,
+    CalibratedMagnetometer,
+    GyroFit,
+    MagFit,
+    calibrate_gyro_bias,
+    calibrate_magnetometer,
+    fit_gyro_bias,
+    fit_mag_iron,
+    update_calibration,
+)
 
 __all__ = [
     # interfaces
@@ -49,4 +61,8 @@ __all__ = [
     # duckiebot backend
     "DuckiebotHUT", "DuckiebotDrivetrain", "PCA9685", "MPU9250",
     "HallWheelEncoder", "VL53L0X", "SSD1306", "ThreadedSampler",
+    # calibration
+    "Calibration", "CalibratedIMU", "CalibratedMagnetometer",
+    "GyroFit", "MagFit", "fit_gyro_bias", "fit_mag_iron",
+    "calibrate_gyro_bias", "calibrate_magnetometer", "update_calibration",
 ]

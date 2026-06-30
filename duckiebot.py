@@ -40,6 +40,7 @@ from .interfaces import (
 )
 from .lowlevel import EdgeCounter, Gpio, I2CDevice
 from .sampler import ThreadedSampler
+from .calibration import Calibration, CalibratedIMU, CalibratedMagnetometer
 
 # Default board addresses / bus -------------------------------------------------
 I2C_BUS = "/dev/i2c-1"
@@ -696,10 +697,17 @@ class DuckiebotHUT(Robot):
     the rest of the robot still comes up.
     """
 
-    def __init__(self, bus: str = I2C_BUS, enable: Sequence[str] = ("all",)):
+    def __init__(self, bus: str = I2C_BUS, enable: Sequence[str] = ("all",),
+                 calibration=None):
         self._bus = bus
         want = set(enable)
         all_ = "all" in want
+
+        # Resolve the optional calibration. None (default) means "raw, as before"
+        # -- a fresh/uncalibrated robot behaves exactly as it did. A Calibration
+        # is used as-is; a str/path is loaded tolerantly (a missing file loads as
+        # identity, so startup never fails on a fresh robot).
+        self._calibration = self._resolve_calibration(calibration)
 
         self._pca = PCA9685(bus, ADDR_MOTORS)
         self._drivetrain = DuckiebotDrivetrain(pca=self._pca, bus=bus)
@@ -710,6 +718,19 @@ class DuckiebotHUT(Robot):
             self._imu = self._try(lambda: MPU9250(bus, ADDR_IMU))
             if self._imu is not None:
                 self._mag = self._imu.as_magnetometer()
+
+        # Calibrated views. With no calibration these ARE the raw devices, so the
+        # sampler below and the imu/magnetometer accessors are unchanged. With a
+        # calibration, the raw drivers stay untouched -- correction is applied by
+        # the wrappers, which still satisfy the IMU/Magnetometer interfaces, so
+        # everything downstream (the sampler included) consumes calibrated data.
+        self._imu_view = self._imu  # type: Optional[IMU]
+        self._mag_view = self._mag  # type: Optional[Magnetometer]
+        if self._calibration is not None:
+            if self._imu is not None:
+                self._imu_view = CalibratedIMU(self._imu, self._calibration)
+            if self._mag is not None:
+                self._mag_view = CalibratedMagnetometer(self._mag, self._calibration)
 
         self._left_enc = self._try(lambda: HallWheelEncoder(GPIO_ENC_LEFT)) \
             if (all_ or "encoders" in want) else None
@@ -725,18 +746,34 @@ class DuckiebotHUT(Robot):
         # One sampler owns the read side of every sensor that came up. It is left
         # STOPPED: bringing the robot up, calibrating, or driving shouldn't pay
         # for sampling until a consumer calls bot.sampler.start(). None if there's
-        # nothing to sample.
-        sensors = (self._imu, self._mag, self._left_enc, self._right_enc, self._tof)
+        # nothing to sample. Built over the views so its Sample stream carries
+        # calibrated data whenever a calibration was supplied.
+        sensors = (self._imu_view, self._mag_view, self._left_enc,
+                   self._right_enc, self._tof)
         if any(s is not None for s in sensors):
             self._sampler = ThreadedSampler(
-                imu=self._imu,
-                magnetometer=self._mag,
+                imu=self._imu_view,
+                magnetometer=self._mag_view,
                 left_encoder=self._left_enc,
                 right_encoder=self._right_enc,
                 range_sensor=self._tof,
             )  # type: Optional[Sampler]
         else:
             self._sampler = None
+
+    @staticmethod
+    def _resolve_calibration(calibration):
+        """Accept None / a Calibration / a path string and return a Calibration
+        or None. A path is loaded tolerantly so a missing file degrades to an
+        identity model rather than failing startup."""
+        if calibration is None:
+            return None
+        if isinstance(calibration, Calibration):
+            return calibration
+        if isinstance(calibration, str):
+            return Calibration.load_or_default(calibration)
+        raise TypeError(
+            "calibration must be None, a Calibration, or a path string")
 
     @staticmethod
     def _try(factory):
@@ -751,11 +788,16 @@ class DuckiebotHUT(Robot):
 
     @property
     def imu(self) -> Optional[IMU]:
-        return self._imu
+        return self._imu_view
 
     @property
     def magnetometer(self) -> Optional[Magnetometer]:
-        return self._mag
+        return self._mag_view
+
+    @property
+    def calibration(self):
+        """The Calibration in effect, or None if the robot is running raw."""
+        return self._calibration
 
     @property
     def left_encoder(self) -> Optional[WheelEncoder]:
