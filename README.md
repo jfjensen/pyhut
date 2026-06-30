@@ -84,12 +84,16 @@ wheels stop if you kill the script mid-run.
 
 | File | What it is |
 |------|-----------|
-| `interfaces.py` | The swappable contract: `Drivetrain`, `IMU`, `Magnetometer`, `WheelEncoder`, `RangeSensor`, `Display`, and the `Robot` facade. |
+| `interfaces.py` | The swappable contract: `Drivetrain`, `IMU`, `Magnetometer`, `WheelEncoder`, `RangeSensor`, `Display`, `Sampler`, and the `Robot` facade. |
 | `lowlevel.py` | Linux primitives: `I2CDevice`, `Gpio`, `EdgeCounter`. |
 | `duckiebot.py` | Concrete drivers + the `DuckiebotHUT` facade. |
+| `sampler.py` | `ThreadedSampler`: reads the enabled sensors on a fixed cadence and publishes one timestamped `Sample` stream. |
+| `calibration.py` | `Calibration` model (gyro bias, mag hard/soft-iron), the fit/collect functions, and the `CalibratedIMU` / `CalibratedMagnetometer` wrappers. |
+| `calibrate.py` | Interactive calibration tool (`sudo python3 -m pyhut.calibrate`) that drives `calibration.py` and saves a JSON model. |
 | `battery.py` | Duckiebattery telemetry and software power-off over USB (raw `termios`, no `pyserial`). |
 | `font.py` | Embedded 5x7 font for the OLED. |
 | `demo.py` | Runnable demo (`sudo python3 -m pyhut.demo`). |
+| `test_calibration.py` | Offline tests for `calibration.py` against fake sensors — no hardware required. |
 | `pyproject.toml`, `setup.py`, `setup.cfg` | Packaging metadata for `pip install` (classic + modern, py3.6-compatible). |
 
 ## Use
@@ -112,6 +116,71 @@ with DuckiebotHUT() as bot:
 The drivetrain runs a background control thread that is the sole owner of the
 motor hardware. Your code only calls `set_target`; if it stalls or crashes, a
 watchdog zeros the wheels after `watchdog_timeout` (default 0.3 s).
+
+## Sensor sampling
+
+The raw drivers are pull-only and their readings carry no timestamp, so
+nothing downstream can line up an IMU sample with a range or an encoder count
+taken at a different moment. `bot.sampler` (a `ThreadedSampler`) fixes that: it
+reads the enabled sensors on a fixed cadence and publishes each cross-sensor
+snapshot as one timestamped `Sample`.
+
+```python
+with DuckiebotHUT() as bot:
+    with bot.sampler:                      # starts the sampler; stops on exit
+        time.sleep(0.1)
+        s = bot.sampler.latest()           # most recent Sample, or None
+        if s is not None:
+            print(s.t, s.accel, s.gyro, s.mag, s.enc_left, s.tof_mm)
+```
+
+A `Sample` has `t` (the `time.monotonic()` clock) plus `accel`, `gyro`,
+`temp_c`, `mag`, `enc_left`, `enc_right`, `enc_left_rate`, `enc_right_rate`,
+`tof_mm`, and `tof_t` — every field but `t` is `None` when that sensor isn't
+fitted or a single read glitched. `bot.sampler` is `None` if no sensors came
+up at all.
+
+While the sampler is running it is the **sole owner** of the sensors it reads;
+get data through `latest()` / `subscribe()` / `subscribe_queue()` instead of
+calling a sensor's own `read()`, so two threads never interleave halves of one
+I2C transaction. It costs nothing until started, and it never touches the
+motors, so it doesn't contend with the drivetrain's control thread.
+
+## Calibration
+
+The raw IMU and magnetometer are uncorrected: the gyro carries a constant
+zero-rate bias, and the compass heading swings with the robot's own hard/soft
+iron signature. `pyhut.calibration` fits a small model from real samples and
+applies it through wrappers (`CalibratedIMU`, `CalibratedMagnetometer`) that
+still satisfy the `IMU` / `Magnetometer` interfaces — so `bot.sampler` and
+`bot.imu` / `bot.magnetometer` automatically read calibrated data once a
+calibration is supplied. With none supplied, everything behaves exactly as
+before (identity, pass-through).
+
+Run the interactive tool to capture one and save it as JSON:
+
+```bash
+sudo python3 -m pyhut.calibrate                  # saves ./pyhut_calibration.json
+sudo python3 -m pyhut.calibrate /etc/pyhut/calibration.json
+```
+
+It walks two phases off the background sampler: hold the robot still while it
+averages the gyro to find the zero-rate bias, then hand-turn the robot through
+a full revolution (don't drive the motors — they sit next to the magnetometer
+and corrupt the reading) while a live coverage meter tracks the sweep, fitting
+the hard-iron center and soft-iron scale. It finishes by replaying raw-vs-
+calibrated gyro and heading from the live stream so you can see the payoff.
+
+Load the saved file on later boots:
+
+```python
+with DuckiebotHUT(calibration="/etc/pyhut/calibration.json") as bot:
+    ...  # bot.imu, bot.magnetometer, bot.sampler are now corrected
+```
+
+A missing or corrupt calibration file loads as an identity model rather than
+failing startup, so a fresh robot always comes up. The raw drivers are never
+modified — correction happens only in the wrapper layer, so it's opt-in.
 
 ## Battery
 
