@@ -396,12 +396,20 @@ def _timeout_us_to_mclks(timeout_period_us: int, vcsel_period_pclks: int) -> int
 
 
 class VL53L0X(RangeSensor):
-    """Time-of-flight distance sensor. read_mm() returns a single measurement."""
+    """Time-of-flight distance sensor.
+
+    read_mm() returns a single measurement (starts, polls, and stops a one-shot
+    ranging sequence on every call). For fast sweeps, use continuous mode:
+    start_continuous() once, then read_continuous() repeatedly, then
+    stop_continuous(). read_continuous() checks RESULT_RANGE_STATUS and returns
+    None on an invalid / out-of-range measurement instead of a garbage value.
+    """
 
     def __init__(self, bus: str = I2C_BUS, address: int = ADDR_TOF, io_timeout_s: float = 0.1):
         self._dev = I2CDevice(bus, address)
         self.io_timeout_s = io_timeout_s
         self._data_ready = False
+        self._continuous_mode = False
         if (self._r8(0xC0) != 0xEE or self._r8(0xC1) != 0xAA or self._r8(0xC2) != 0x10):
             raise RuntimeError("VL53L0X ID check failed. Check wiring / XSHUT.")
         for pair in ((0x88, 0x00), (0x80, 0x01), (0xFF, 0x01), (0x00, 0x00)):
@@ -592,7 +600,25 @@ class VL53L0X(RangeSensor):
             self._data_ready = self._r8(_RESULT_INTERRUPT_STATUS) & 0x07 != 0
         return self._data_ready
 
-    def read_mm(self) -> int:
+    # measurement timing budget (speed / accuracy tradeoff) ----------------
+    # The measurement_timing_budget property (getter + setter) above reads and
+    # writes the sensor's per-measurement time in microseconds. Longer budgets
+    # give more accurate readings; the minimum is 20000 us (20 ms). Set this
+    # before starting continuous ranging, e.g.:
+    #     tof.measurement_timing_budget = 20000   # fast sweep
+    #     tof.measurement_timing_budget = 200000  # slow, accurate
+
+    # range-status decoding -------------------------------------------------
+    # RESULT_RANGE_STATUS (0x14) holds the device range status in bits [6:3].
+    # A decoded status of 11 ("valid") is the only good measurement; anything
+    # else (sigma / signal fail, min/max range fail, phase failures, etc.) means
+    # the range value is not trustworthy. See VL53L0X_GetRangeStatus in ST's API.
+    def _range_status(self) -> int:
+        return (self._r8(_RESULT_RANGE_STATUS) & 0x78) >> 3
+
+    def _do_range_measurement(self) -> None:
+        # Adapted from do_range_measurement / readRangeSingleMillimeters in the
+        # Adafruit CircuitPython VL53L0X driver (pololu code).
         for pair in (
             (0x80, 0x01), (0xFF, 0x01), (0x00, 0x00), (0x91, self._stop_variable),
             (0x00, 0x01), (0xFF, 0x00), (0x80, 0x00), (_SYSRANGE_START, 0x01),
@@ -602,16 +628,92 @@ class VL53L0X(RangeSensor):
         while (self._r8(_SYSRANGE_START) & 0x01) > 0:
             if self.io_timeout_s > 0 and (time.monotonic() - start) >= self.io_timeout_s:
                 raise RuntimeError("Timeout waiting for VL53L0X!")
+
+    def _read_range(self):
+        # Adapted from read_range / readRangeContinuousMillimeters in the
+        # Adafruit CircuitPython VL53L0X driver (pololu code). Waits for a
+        # reading, checks the range status, then clears the interrupt. Returns
+        # the distance in mm, or None if the measurement was invalid.
         start = time.monotonic()
         while not self._ready:
             if self.io_timeout_s > 0 and (time.monotonic() - start) >= self.io_timeout_s:
                 raise RuntimeError("Timeout waiting for VL53L0X!")
+        status = self._range_status()
         range_mm = self._r16(_RESULT_RANGE_STATUS + 10)
         self._w8(_SYSTEM_INTERRUPT_CLEAR, 0x01)
         self._data_ready = False
+        if status != 11:
+            return None
         return range_mm
 
+    @property
+    def is_continuous_mode(self) -> bool:
+        """True while continuous ranging is active."""
+        return self._continuous_mode
+
+    def read_mm(self) -> int:
+        """Single-shot distance in millimetres.
+
+        Runs a full one-shot start/poll sequence. Returns the raw range value;
+        on an invalid / out-of-range measurement it returns 0 rather than a
+        garbage distance. Use read_continuous() to distinguish "invalid" (None)
+        from a genuine reading during a fast sweep.
+        """
+        self._do_range_measurement()
+        mm = self._read_range()
+        return 0 if mm is None else mm
+
+    def start_continuous(self) -> None:
+        """Start continuous back-to-back ranging.
+
+        After this returns, call read_continuous() to fetch each reading as it
+        becomes ready (no per-sample start/poll/stop overhead), then
+        stop_continuous() when done.
+        """
+        # Adapted from start_continuous / startContinuous in the Adafruit
+        # CircuitPython VL53L0X driver (pololu code).
+        for pair in (
+            (0x80, 0x01), (0xFF, 0x01), (0x00, 0x00), (0x91, self._stop_variable),
+            (0x00, 0x01), (0xFF, 0x00), (0x80, 0x00), (_SYSRANGE_START, 0x02),
+        ):
+            self._w8(pair[0], pair[1])
+        start = time.monotonic()
+        while (self._r8(_SYSRANGE_START) & 0x01) > 0:
+            if self.io_timeout_s > 0 and (time.monotonic() - start) >= self.io_timeout_s:
+                raise RuntimeError("Timeout waiting for VL53L0X!")
+        self._continuous_mode = True
+
+    def read_continuous(self):
+        """Return the next continuous reading in mm, or None if invalid.
+
+        Blocks (up to io_timeout_s) until the sensor's next measurement is
+        ready. Checks RESULT_RANGE_STATUS: returns the distance in millimetres
+        on a valid measurement, or None on an invalid / out-of-range one.
+        start_continuous() must have been called first.
+        """
+        if not self._continuous_mode:
+            raise RuntimeError("read_continuous() requires start_continuous() first.")
+        return self._read_range()
+
+    def stop_continuous(self) -> None:
+        """Stop continuous ranging and restore single-shot mode."""
+        # Adapted from stop_continuous / stopContinuous in the Adafruit
+        # CircuitPython VL53L0X driver (pololu code).
+        for pair in (
+            (_SYSRANGE_START, 0x01), (0xFF, 0x01), (0x00, 0x00),
+            (0x91, 0x00), (0x00, 0x01), (0xFF, 0x00),
+        ):
+            self._w8(pair[0], pair[1])
+        self._continuous_mode = False
+        # Restore the sensor to single-ranging mode, mirroring upstream.
+        self._do_range_measurement()
+
     def close(self) -> None:
+        if self._continuous_mode:
+            try:
+                self.stop_continuous()
+            except Exception:
+                pass
         self._dev.close()
 
 
